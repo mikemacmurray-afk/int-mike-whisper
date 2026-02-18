@@ -6,9 +6,31 @@ use std::sync::{Arc, Mutex};
 use std::str::FromStr;
 use std::io::Write;
 
+enum EngineChild {
+    Std(std::process::Child),
+    Sidecar(tauri_plugin_shell::process::CommandChild),
+}
+
 struct EngineState {
-    child: Arc<Mutex<Option<std::process::Child>>>,
+    child: Arc<Mutex<Option<EngineChild>>>,
     current_shortcut: Mutex<Option<Shortcut>>,
+}
+
+impl EngineChild {
+    fn stdin_write(&mut self, data: &[u8]) -> std::io::Result<()> {
+        match self {
+            EngineChild::Std(child) => {
+                if let Some(mut stdin) = child.stdin.as_mut() {
+                    stdin.write_all(data)?;
+                    stdin.flush()?;
+                }
+                Ok(())
+            }
+            EngineChild::Sidecar(child) => {
+                child.write(data).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -16,10 +38,7 @@ fn ping_sidecar(app: AppHandle) {
     let state = app.state::<EngineState>();
     let mut child_lock = state.child.lock().unwrap();
     if let Some(child) = child_lock.as_mut() {
-        if let Some(mut stdin) = child.stdin.as_ref() {
-            let _ = stdin.write_all(b"PING\n");
-            let _ = stdin.flush();
-        }
+        let _ = child.stdin_write(b"PING\n");
     }
 }
 
@@ -28,10 +47,7 @@ fn force_record_start(app: AppHandle) {
     let state = app.state::<EngineState>();
     let mut child_lock = state.child.lock().unwrap();
     if let Some(child) = child_lock.as_mut() {
-        if let Some(mut stdin) = child.stdin.as_ref() {
-            let _ = stdin.write_all(b"START_RECORDING\n");
-            let _ = stdin.flush();
-        }
+        let _ = child.stdin_write(b"START_RECORDING\n");
     }
 }
 
@@ -40,10 +56,7 @@ fn force_record_stop(app: AppHandle) {
     let state = app.state::<EngineState>();
     let mut child_lock = state.child.lock().unwrap();
     if let Some(child) = child_lock.as_mut() {
-        if let Some(mut stdin) = child.stdin.as_ref() {
-            let _ = stdin.write_all(b"STOP_RECORDING\n");
-            let _ = stdin.flush();
-        }
+        let _ = child.stdin_write(b"STOP_RECORDING\n");
     }
 }
 
@@ -108,26 +121,23 @@ fn sync_sidecar_config(app: &AppHandle) {
     let mut child_lock = state.child.lock().unwrap();
     
     if let Some(child) = child_lock.as_mut() {
-        if let Some(mut stdin) = child.stdin.as_ref() {
-            if let Ok(store) = app.store("settings.json") {
-                let api_key = store.get("openrouter_key")
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "".to_string());
-                let mode = store.get("ai_mode")
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "raw".to_string());
-                
-                let config_cmd = serde_json::json!({
-                    "type": "SET_CONFIG",
-                    "data": {
-                        "api_key": api_key,
-                        "mode": mode
-                    }
-                });
-                
-                let _ = stdin.write_all(format!("{}\n", config_cmd.to_string()).as_bytes());
-                let _ = stdin.flush();
-            }
+        if let Ok(store) = app.store("settings.json") {
+            let api_key = store.get("openrouter_key")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "".to_string());
+            let mode = store.get("ai_mode")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "raw".to_string());
+            
+            let config_cmd = serde_json::json!({
+                "type": "SET_CONFIG",
+                "data": {
+                    "api_key": api_key,
+                    "mode": mode
+                }
+            });
+            
+            let _ = child.stdin_write(format!("{}\n", config_cmd.to_string()).as_bytes());
         }
     }
 }
@@ -191,19 +201,15 @@ pub fn run() {
                         let mut child_lock = engine_state.child.lock().unwrap();
                         
                         if let Some(child) = child_lock.as_mut() {
-                            if let Some(mut stdin) = child.stdin.as_ref() {
-                                match event.state() {
-                                    ShortcutState::Pressed => {
-                                        println!("Sending command to sidecar: START_RECORDING");
-                                        let _ = stdin.write_all(b"START_RECORDING\n");
-                                        let _ = stdin.flush();
-                                        let _ = app.emit("sidecar-event", "{\"type\": \"STATUS\", \"data\": \"RECORDING\"}");
-                                    }
-                                    ShortcutState::Released => {
-                                        println!("Sending command to sidecar: STOP_RECORDING");
-                                        let _ = stdin.write_all(b"STOP_RECORDING\n");
-                                        let _ = stdin.flush();
-                                    }
+                            match event.state() {
+                                ShortcutState::Pressed => {
+                                    println!("Sending command to sidecar: START_RECORDING");
+                                    let _ = child.stdin_write(b"START_RECORDING\n");
+                                    let _ = app.emit("sidecar-event", "{\"type\": \"STATUS\", \"data\": \"RECORDING\"}");
+                                }
+                                ShortcutState::Released => {
+                                    println!("Sending command to sidecar: STOP_RECORDING");
+                                    let _ = child.stdin_write(b"STOP_RECORDING\n");
                                 }
                             }
                         } else {
@@ -246,14 +252,20 @@ pub fn run() {
             }
             *app.state::<EngineState>().current_shortcut.lock().unwrap() = Some(shortcut);
 
-            // Spawn Sidecar (Running Python directly via std::process for dev)
-            let cwd = std::env::current_dir().unwrap();
-            let project_root = cwd.parent().unwrap().parent().unwrap();
-            let python_path = project_root.join("venv").join("Scripts").join("python.exe");
-            let script_path = project_root.join("src").join("sidecar_main.py");
+            // Spawn AI Engine
+            #[cfg(debug_assertions)]
+            let (python_path, script_path, project_root) = {
+                let cwd = std::env::current_dir().unwrap();
+                let project_root = cwd.parent().unwrap().parent().unwrap();
+                let python_path = project_root.join("venv").join("Scripts").join("python.exe");
+                let script_path = project_root.join("src").join("sidecar_main.py");
+                (python_path, script_path, project_root.to_path_buf())
+            };
+
+            #[cfg(debug_assertions)]
+            println!("Starting Python Engine via std::process (DEV): {:?}", script_path);
             
-            println!("Starting Python Engine via std::process: {:?}", script_path);
-            
+            #[cfg(debug_assertions)]
             let mut child = std::process::Command::new(python_path)
                 .arg(script_path)
                 .current_dir(project_root)
@@ -263,43 +275,87 @@ pub fn run() {
                 .spawn()
                 .map_err(|e| Box::new(e))?;
 
-            let stdout = child.stdout.take().unwrap();
-            let stderr = child.stderr.take().unwrap();
+            #[cfg(not(debug_assertions))]
+            use tauri_plugin_shell::ShellExt;
+            #[cfg(not(debug_assertions))]
+            let sidecar_command = app.shell().sidecar("mike-whisper-engine")
+                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
             
-            // Re-wrap pipes for the existing async loop
+            #[cfg(not(debug_assertions))]
+            let (mut rx, mut child) = sidecar_command
+                .spawn()
+                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+
+            #[cfg(debug_assertions)]
+            let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+            
+            #[cfg(debug_assertions)]
             let stdout_reader = std::io::BufReader::new(stdout);
+            #[cfg(debug_assertions)]
             let stderr_reader = std::io::BufReader::new(stderr);
             
-            let app_clone = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                use std::io::BufRead;
-                let mut lines = stdout_reader.lines();
-                while let Some(line) = lines.next() {
-                    if let Ok(l) = line {
-                        let _ = app_clone.emit("sidecar-event", &l);
-                        // Forward certain events to overlay
-                        if l.contains("PARTIAL_RESULT") || l.contains("RESULT") || l.contains("STATUS") {
-                            let _ = app_clone.emit_to("overlay", "overlay-event", &l);
+            #[cfg(debug_assertions)]
+            {
+                let app_clone = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use std::io::BufRead;
+                    let mut lines = stdout_reader.lines();
+                    while let Some(line) = lines.next() {
+                        if let Ok(l) = line {
+                            let _ = app_clone.emit("sidecar-event", &l);
+                            if l.contains("PARTIAL_RESULT") || l.contains("RESULT") || l.contains("STATUS") {
+                                let _ = app_clone.emit_to("overlay", "overlay-event", &l);
+                            }
                         }
                     }
-                }
-            });
+                });
 
-            let app_clone_err = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                use std::io::BufRead;
-                let mut lines = stderr_reader.lines();
-                while let Some(line) = lines.next() {
-                    if let Ok(l) = line {
-                        eprintln!("Sidecar Stderr: {}", l);
-                        let _ = app_clone_err.emit("sidecar-event", format!("{{\"type\": \"LOG\", \"data\": \"{}\"}}", l));
+                let app_clone_err = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use std::io::BufRead;
+                    let mut lines = stderr_reader.lines();
+                    while let Some(line) = lines.next() {
+                        if let Ok(l) = line {
+                            eprintln!("Sidecar Stderr: {}", l);
+                            let _ = app_clone_err.emit("sidecar-event", format!("{{\"type\": \"LOG\", \"data\": \"{}\"}}", l));
+                        }
                     }
-                }
-            });
+                });
+            }
+
+            #[cfg(not(debug_assertions))]
+            {
+                let app_clone = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri_plugin_shell::process::CommandEvent;
+                    while let Some(event) = rx.recv().await {
+                        match event {
+                            CommandEvent::Stdout(line) => {
+                                if let Ok(l) = String::from_utf8(line) {
+                                    let _ = app_clone.emit("sidecar-event", &l);
+                                    if l.contains("PARTIAL_RESULT") || l.contains("RESULT") || l.contains("STATUS") {
+                                        let _ = app_clone.emit_to("overlay", "overlay-event", &l);
+                                    }
+                                }
+                            }
+                            CommandEvent::Stderr(line) => {
+                                if let Ok(l) = String::from_utf8(line) {
+                                    eprintln!("Sidecar Stderr: {}", l);
+                                    let _ = app_clone.emit("sidecar-event", format!("{{\"type\": \"LOG\", \"data\": \"{}\"}}", l));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
 
             // Store child handle
             let state = app.state::<EngineState>();
-            *state.child.lock().unwrap() = Some(child);
+            #[cfg(debug_assertions)]
+            { *state.child.lock().unwrap() = Some(EngineChild::Std(child)); }
+            #[cfg(not(debug_assertions))]
+            { *state.child.lock().unwrap() = Some(EngineChild::Sidecar(child)); }
             
             // Sync initial config
             sync_sidecar_config(app.handle());
