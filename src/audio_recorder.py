@@ -35,6 +35,13 @@ class AudioRecorder:
             self.stream.start()
         logger.info("Started recording audio...")
 
+    def get_current_buffer(self):
+        """Returns the current accumulated audio data without stopping."""
+        if not self.recording_buffer:
+            return np.array([], dtype=np.float32)
+        # Combine current chunks
+        return np.concatenate(list(self.recording_buffer), axis=0)
+
     def stop_recording(self):
         """Stops capturing and returns the accumulated audio data."""
         self.is_recording = False
