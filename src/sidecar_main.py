@@ -6,8 +6,15 @@ import threading
 import queue
 import time
 
-# Add current dir to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Handle PyInstaller paths
+if getattr(sys, 'frozen', False):
+    # If running as a bundle, the modules are in the temp folder
+    bundle_dir = sys._MEIPASS
+else:
+    # If running in dev, use the current folder
+    bundle_dir = os.path.dirname(os.path.abspath(__file__))
+
+sys.path.append(bundle_dir)
 
 from audio_recorder import AudioRecorder
 from transcriber import Transcriber
