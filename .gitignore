@@ -4,3 +4,9 @@ __pycache__/
 .DS_Store
 node_modules/
 .env
+build/
+dist/
+*.spec
+mike-whisper-ui/src-tauri/target/
+mike-whisper-ui/src-tauri/bin/*.exe
+mike-whisper-ui/src-tauri/cargo_error.txt
