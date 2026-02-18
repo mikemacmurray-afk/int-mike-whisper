@@ -47,7 +47,7 @@ function App() {
     // Load Settings from Rust
     invoke<string>("get_setting", { key: "ai_mode" }).then((m) => setAiMode(m || "raw")).catch(console.error);
 
-    // Initial Engine Check
+    // Initial Engine Check - give it 60s for first-run model download
     const timer = setTimeout(() => {
       setStatus(currentStatus => {
         if (currentStatus === "IDLE") {
@@ -56,9 +56,17 @@ function App() {
         }
         return currentStatus;
       });
-    }, 20000); // Give it 20 seconds for Whisper to load base model
+    }, 60000);
 
     return () => clearTimeout(timer);
+  }, []);
+
+  // Ping the engine after the event listener is ready to get current status
+  useEffect(() => {
+    const pingTimer = setTimeout(() => {
+      invoke("ping_sidecar").catch(console.error);
+    }, 2000); // Wait 2s for listener to be registered, then ask engine for status
+    return () => clearTimeout(pingTimer);
   }, []);
 
   const addToHistory = (text: string) => {
