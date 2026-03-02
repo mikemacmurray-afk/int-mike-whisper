@@ -104,17 +104,30 @@ class MikeWhisperSidecar:
         """Worker thread to transcribe partial data while recording."""
         logger.info("Starting partial transcription worker...")
         while self.is_live:
-            time.sleep(0.8)  # Transcribe every 800ms
+            time.sleep(1.0)  # Throttled to 1000ms
             if not self.is_live:
                 break
             
-            # Get current audio data without stopping
-            audio_data = self.recorder.get_current_buffer()
-            if audio_data.size > 16000: # At least 1 second
-                # Use a fast model/settings for partials if needed, or same
-                text = self.transcriber.transcribe(audio_data)
-                if text and self.is_live:
-                    self._send_event("PARTIAL_RESULT", text)
+            # Auto-stop from silence timeout
+            if getattr(self.recorder, 'timeout_triggered', False):
+                logger.info("Silence timeout hit, stopping recording automatically.")
+                self.recorder.timeout_triggered = False
+                self.is_live = False
+                audio_data = self.recorder.stop_recording()
+                if audio_data.size > 0:
+                    self.processing_queue.put(audio_data)
+                else:
+                    self._send_event("STATUS", "READY")
+                break
+
+            # Only transcribe partial if user actually spoke since last tick
+            if getattr(self.recorder, 'speech_detected_since_last_poll', False):
+                self.recorder.speech_detected_since_last_poll = False
+                audio_data = self.recorder.get_current_buffer()
+                if audio_data.size > 16000: # At least 1 second
+                    text = self.transcriber.transcribe(audio_data)
+                    if text and self.is_live:
+                        self._send_event("PARTIAL_RESULT", text)
 
     def _process_worker(self):
         while self.is_running:

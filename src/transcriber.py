@@ -22,26 +22,29 @@ class Transcriber:
             compute_type = "float16" if device == "cuda" else "int8"
             
         logger.info(f"Initializing Whisper model '{model_size}' on '{device}' ({compute_type})...")
-        self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        self.model = WhisperModel(
+            model_size, 
+            device=device, 
+            compute_type=compute_type,
+            cpu_threads=4 # Limit CPU threads to reduce system load during transcription
+        )
 
     def transcribe(self, audio_data):
         """
         Transcribes the provided audio data (numpy array).
         Returns the stitched together text.
         """
-        if audio_data.size == 0:
+        if audio_data.size < 8000: # Discard if less than 500ms
             return ""
 
         # faster-whisper expects a 1D float32 array
         if len(audio_data.shape) > 1:
             audio_data = audio_data.flatten()
 
-        # Optimizations: greedy decoding (beam_size=1) and VAD filtering to skip silence
+        # Input is already pre-gated by VAD, so no need for vad_filter here.
         segments, info = self.model.transcribe(
             audio_data, 
-            beam_size=1,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500)
+            beam_size=1
         )
         
         text = "".join([segment.text for segment in segments]).strip()
