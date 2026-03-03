@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import "./App.css";
 
-type SidecarStatus = "IDLE" | "RECORDING" | "PROCESSING" | "READY" | "ERROR" | "NO_SPEECH";
+type SidecarStatus = "INITIALIZING" | "IDLE" | "RECORDING" | "PROCESSING" | "READY" | "ERROR" | "NO_SPEECH";
 
 interface SidecarEvent {
   type: string;
@@ -18,7 +18,7 @@ interface HistoryItem {
 }
 
 function App() {
-  const [status, setStatus] = useState<SidecarStatus>("IDLE");
+  const [status, setStatus] = useState<SidecarStatus>("INITIALIZING");
   const [lastText, setLastText] = useState("");
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [aiMode, setAiMode] = useState("raw");
@@ -50,8 +50,8 @@ function App() {
     // Initial Engine Check - give it 60s for first-run model download
     const timer = setTimeout(() => {
       setStatus(currentStatus => {
-        if (currentStatus === "IDLE") {
-          setError("Engine failed to respond. Try refreshing.");
+        if (currentStatus === "INITIALIZING" || currentStatus === "IDLE") {
+          setError("Engine failed to respond. Try restarting.");
           return "ERROR";
         }
         return currentStatus;
@@ -90,6 +90,7 @@ function App() {
         switch (payload.type) {
           case "READY":
             setStatus("READY");
+            setError(""); // Clean any previous transient errors
             console.log("Engine is READY");
             break;
           case "STATUS":

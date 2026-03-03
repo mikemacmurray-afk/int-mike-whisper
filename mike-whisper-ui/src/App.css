@@ -77,6 +77,12 @@ h1 {
   border-color: #334155;
 }
 
+.status-badge.initializing {
+  background: #3b82f6; /* Blueish tone */
+  color: white;
+  animation: pulse 2s infinite;
+}
+
 .status-badge.recording {
   background: #ef4444;
   color: white;

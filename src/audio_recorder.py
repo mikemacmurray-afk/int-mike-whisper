@@ -30,7 +30,7 @@ class StreamingSileroVAD:
             None,
             {"input": batched_audio, "h": self.h, "c": self.c},
         )
-        return output[0][0]
+        return float(output[0])
 
 class AudioRecorder:
     def __init__(self, sample_rate=16000, channels=1):

@@ -32,6 +32,7 @@ logger = logging.getLogger("MikeWhisperSidecar")
 class MikeWhisperSidecar:
     def __init__(self):
         logger.info("Initializing MikeWhisper Sidecar Engine...")
+        print(json.dumps({"type": "STATUS", "data": "INITIALIZING"}), flush=True)
         self.recorder = AudioRecorder()
         self.transcriber = Transcriber(model_size="base.en")
         self.injector = TextInjector()
