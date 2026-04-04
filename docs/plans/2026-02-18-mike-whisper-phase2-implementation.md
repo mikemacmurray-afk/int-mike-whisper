@@ -1,6 +1,7 @@
 # MikeWhisper Phase 2 Implementation Plan (Tauri + Sidecar)
 
-**Current Version:** `1.4.0` (Dev Branch: `dev`)
+**Last Updated:** `2026-04-04`
+**Current Version:** `1.4.0` (Dev Branch: `dev-v1.4.0`)
 **Status:** ✅ Phase 2 Core Completed | 🚀 Phase 3 Development Started
 
 > **For Agent:** REQUIRED SUB-SKILL: Use [executing-plans] to implement this plan task-by-task.
