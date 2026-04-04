@@ -7,11 +7,13 @@ function SettingsApp() {
     const [hotkey, setHotkey] = useState("Ctrl+Shift+Space");
     const [autostart, setAutostart] = useState(false);
     const [openRouterKey, setOpenRouterKey] = useState("");
+    const [vocabulary, setVocabulary] = useState("");
 
     useEffect(() => {
         // Load Settings from Rust
         invoke<string>("get_hotkey").then(setHotkey).catch(console.error);
         invoke<string>("get_setting", { key: "openrouter_key" }).then(setOpenRouterKey).catch(console.error);
+        invoke<string>("get_setting", { key: "custom_vocabulary" }).then(setVocabulary).catch(console.error);
         isEnabled().then(setAutostart).catch(console.error);
     }, []);
 
@@ -52,6 +54,14 @@ function SettingsApp() {
         }
     };
 
+    const saveVocabulary = async () => {
+        try {
+            await invoke("update_settings", { key: "custom_vocabulary", value: vocabulary });
+        } catch (e) {
+            console.error("Failed to save vocabulary:", e);
+        }
+    };
+
     return (
         <main className="container settings-window">
             <div className="status-header">
@@ -81,6 +91,17 @@ function SettingsApp() {
                             <code className="hotkey">{hotkey}</code>
                             <button className="btn-small" onClick={updateHotkey}>Change</button>
                         </div>
+                    </div>
+                    <div className="setting-item-block">
+                        <label>Custom Vocabulary</label>
+                        <textarea
+                            className="vocab-textarea"
+                            placeholder="Enter names, technical terms, or phrases (comma separated)..."
+                            value={vocabulary}
+                            onChange={(e) => setVocabulary(e.target.value)}
+                            onBlur={saveVocabulary}
+                        />
+                        <p className="hint-text">Whisper will prioritize these words during transcription.</p>
                     </div>
                 </section>
             </div>

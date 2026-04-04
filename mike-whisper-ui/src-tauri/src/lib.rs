@@ -128,12 +128,16 @@ fn sync_sidecar_config(app: &AppHandle) {
             let mode = store.get("ai_mode")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| "raw".to_string());
+            let vocabulary = store.get("custom_vocabulary")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "".to_string());
             
             let config_cmd = serde_json::json!({
                 "type": "SET_CONFIG",
                 "data": {
                     "api_key": api_key,
-                    "mode": mode
+                    "mode": mode,
+                    "vocabulary": vocabulary
                 }
             });
             

@@ -42,7 +42,8 @@ class MikeWhisperSidecar:
         self.is_live = False
         self.config = {
             "api_key": "",
-            "mode": "raw"
+            "mode": "raw",
+            "vocabulary": ""
         }
         
         # Start processing worker
@@ -126,7 +127,10 @@ class MikeWhisperSidecar:
                 self.recorder.speech_detected_since_last_poll = False
                 audio_data = self.recorder.get_current_buffer()
                 if audio_data.size > 16000: # At least 1 second
-                    text = self.transcriber.transcribe(audio_data)
+                    text = self.transcriber.transcribe(
+                        audio_data, 
+                        initial_prompt=self.config.get("vocabulary")
+                    )
                     if text and self.is_live:
                         self._send_event("PARTIAL_RESULT", text)
 
@@ -136,7 +140,10 @@ class MikeWhisperSidecar:
                 audio_data = self.processing_queue.get(timeout=0.5)
                 self._send_event("STATUS", "PROCESSING")
                 
-                text = self.transcriber.transcribe(audio_data)
+                text = self.transcriber.transcribe(
+                    audio_data, 
+                    initial_prompt=self.config.get("vocabulary")
+                )
                 
                 if text:
                     # Apply AI formatting if enabled

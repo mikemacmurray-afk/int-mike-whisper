@@ -29,7 +29,7 @@ class Transcriber:
             cpu_threads=4 # Limit CPU threads to reduce system load during transcription
         )
 
-    def transcribe(self, audio_data):
+    def transcribe(self, audio_data, initial_prompt=None):
         """
         Transcribes the provided audio data (numpy array).
         Returns the stitched together text.
@@ -44,7 +44,8 @@ class Transcriber:
         # Input is already pre-gated by VAD, so no need for vad_filter here.
         segments, info = self.model.transcribe(
             audio_data, 
-            beam_size=1
+            beam_size=1,
+            initial_prompt=initial_prompt
         )
         
         text = "".join([segment.text for segment in segments]).strip()

@@ -381,3 +381,43 @@ select {
   font-size: 0.85rem;
   border: 1px solid #fca5a5;
 }
+.setting-item-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.setting-item-block label {
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+}
+
+.vocab-textarea {
+  background: #0f172a;
+  border: 1px solid #334155;
+  color: white;
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  outline: none;
+  min-height: 100px;
+  max-height: 200px;
+  font-family: inherit;
+  font-size: 0.875rem;
+  resize: vertical;
+  transition: border-color 0.2s;
+}
+
+.vocab-textarea:focus {
+  border-color: #3b82f6;
+}
+
+.hint-text {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin: 0;
+  font-style: italic;
+}
