@@ -29,9 +29,9 @@ def test_live_transcription():
     print(f" - Processing Time: {duration:.2f}s")
     
     if text:
-        print("\n✅ SUCCESS: Transcription received!")
+        print("\nSUCCESS: Transcription received!")
     else:
-        print("\n❌ FAILED: No text transcribed. Ensure you spoke during the recording.")
+        print("\nFAILED: No text transcribed. Ensure you spoke during the recording.")
 
 if __name__ == "__main__":
     test_live_transcription()

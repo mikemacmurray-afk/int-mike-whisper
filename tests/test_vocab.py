@@ -1,4 +1,10 @@
+import sys
+import os
 import numpy as np
+
+# Add src to path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from src.transcriber import Transcriber
 
 def test_transcriber_with_prompt():

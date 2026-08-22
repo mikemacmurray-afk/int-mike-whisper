@@ -27,11 +27,11 @@ def test_audio_capture():
     print(f" - RMS (Volume): {rms:.4f}")
     
     if max_amplitude > 0.01:
-        print("\n✅ SUCCESS: Audio captured and it's not silent!")
+        print("\nSUCCESS: Audio captured and it's not silent!")
     elif max_amplitude > 0:
-        print("\n⚠️ WARNING: Audio captured but it is very quiet. Check your mic gain.")
+        print("\nWARNING: Audio captured but it is very quiet. Check your mic gain.")
     else:
-        print("\n❌ FAILED: Silence detected. Check your default microphone settings.")
+        print("\nFAILED: Silence detected. Check your default microphone settings.")
 
 if __name__ == "__main__":
     test_audio_capture()

@@ -1,7 +1,7 @@
 from faster_whisper import WhisperModel
 import numpy as np
 import logging
-import torch
+import ctranslate2
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,7 +16,11 @@ class Transcriber:
         compute_type: "float32", "int8", "float16", or None (auto-detect)
         """
         if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            try:
+                device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+            except Exception as e:
+                logger.warning(f"Error checking CUDA devices via ctranslate2: {e}. Defaulting to cpu.")
+                device = "cpu"
         
         if compute_type is None:
             compute_type = "float16" if device == "cuda" else "int8"

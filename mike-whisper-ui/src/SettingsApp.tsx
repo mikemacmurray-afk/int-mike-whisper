@@ -8,14 +8,25 @@ function SettingsApp() {
     const [autostart, setAutostart] = useState(false);
     const [openRouterKey, setOpenRouterKey] = useState("");
     const [vocabulary, setVocabulary] = useState("");
+    const [modelSize, setModelSize] = useState("base.en");
 
     useEffect(() => {
         // Load Settings from Rust
         invoke<string>("get_hotkey").then(setHotkey).catch(console.error);
         invoke<string>("get_setting", { key: "openrouter_key" }).then(setOpenRouterKey).catch(console.error);
         invoke<string>("get_setting", { key: "custom_vocabulary" }).then(setVocabulary).catch(console.error);
+        invoke<string>("get_setting", { key: "model_size" }).then((m) => setModelSize(m || "base.en")).catch(console.error);
         isEnabled().then(setAutostart).catch(console.error);
     }, []);
+
+    const updateModelSize = async (newModel: string) => {
+        try {
+            await invoke("update_settings", { key: "model_size", value: newModel });
+            setModelSize(newModel);
+        } catch (e) {
+            alert("Failed to update model: " + e);
+        }
+    };
 
     const updateHotkey = async () => {
         const newHotkey = prompt("Enter new hotkey (e.g. F1, Ctrl+S):", hotkey);
@@ -91,6 +102,19 @@ function SettingsApp() {
                             <code className="hotkey">{hotkey}</code>
                             <button className="btn-small" onClick={updateHotkey}>Change</button>
                         </div>
+                    </div>
+                    <div className="setting-item">
+                        <label>Speech Model</label>
+                        <select 
+                            value={modelSize} 
+                            onChange={(e) => updateModelSize(e.target.value)}
+                        >
+                            <option value="tiny.en">Tiny (Fastest, low accuracy)</option>
+                            <option value="base.en">Base (Fast, normal accuracy)</option>
+                            <option value="Systran/faster-distil-whisper-small.en">Distil Small (Very Fast, high accuracy)</option>
+                            <option value="small.en">Small (Moderate, high accuracy)</option>
+                            <option value="Systran/faster-distil-whisper-medium.en">Distil Medium (Fast, very high accuracy)</option>
+                        </select>
                     </div>
                     <div className="setting-item-block">
                         <label>Custom Vocabulary</label>

@@ -131,13 +131,17 @@ fn sync_sidecar_config(app: &AppHandle) {
             let vocabulary = store.get("custom_vocabulary")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| "".to_string());
+            let model_size = store.get("model_size")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "base.en".to_string());
             
             let config_cmd = serde_json::json!({
                 "type": "SET_CONFIG",
                 "data": {
                     "api_key": api_key,
                     "mode": mode,
-                    "vocabulary": vocabulary
+                    "vocabulary": vocabulary,
+                    "model_size": model_size
                 }
             });
             

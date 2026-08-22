@@ -17,8 +17,6 @@ else:
 
 sys.path.append(bundle_dir)
 
-from audio_recorder import AudioRecorder
-from transcriber import Transcriber
 from injector import TextInjector
 
 # Configure logging to stderr so it doesn't mess with stdout IPC
@@ -32,26 +30,37 @@ logger = logging.getLogger("MikeWhisperSidecar")
 class MikeWhisperSidecar:
     def __init__(self):
         logger.info("Initializing MikeWhisper Sidecar Engine...")
-        print(json.dumps({"type": "STATUS", "data": "INITIALIZING"}), flush=True)
-        self.recorder = AudioRecorder()
-        self.transcriber = Transcriber(model_size="base.en")
+        
+        # AudioRecorder and Transcriber will be asynchronously loaded
+        self.recorder = None
+        self.transcriber = None
+        self.current_loaded_model = None
         self.injector = TextInjector()
         
         self.processing_queue = queue.Queue()
         self.is_running = True
         self.is_live = False
+        self.is_loading = False
+        self.models_loaded = False
+        
         self.config = {
             "api_key": "",
             "mode": "raw",
-            "vocabulary": ""
+            "vocabulary": "",
+            "model_size": "base.en"
         }
         
         # Start processing worker
         self.processor_thread = threading.Thread(target=self._process_worker, daemon=True)
         self.processor_thread.start()
         
-        # Send Ready signal
+        # Send Ready signals immediately to unblock Tauri
         self._send_event("READY")
+        self._send_event("STATUS", "INITIALIZING")
+        
+        # Start background model initialization
+        self.init_thread = threading.Thread(target=self._initialize_models, daemon=True)
+        self.init_thread.start()
 
     def _send_event(self, event_type, data=None):
         """Sends a JSON event to stdout for Tauri to consume."""
@@ -102,6 +111,59 @@ class MikeWhisperSidecar:
             logger.error(f"AI Formatting failed: {e}")
             return text
 
+    def _initialize_models(self):
+        """Background thread to import heavy libraries and load Whisper/VAD models."""
+        self.is_loading = True
+        self._send_event("STATUS", "INITIALIZING")
+        
+        try:
+            logger.info("Background thread importing dependencies...")
+            global AudioRecorder, Transcriber
+            
+            # Defer heavy imports
+            from audio_recorder import AudioRecorder
+            from transcriber import Transcriber
+            
+            # Wait briefly to let SET_CONFIG command arrive from Tauri (which has the configured model size)
+            time.sleep(0.5)
+            
+            model_size = self.config.get("model_size", "base.en")
+            logger.info(f"Background thread loading models (Whisper: {model_size})...")
+            
+            self.recorder = AudioRecorder()
+            self.transcriber = Transcriber(model_size=model_size)
+            self.current_loaded_model = model_size
+            
+            self.models_loaded = True
+            self.is_loading = False
+            logger.info("Background thread initialization complete. Engine is READY.")
+            self._send_event("STATUS", "READY")
+        except Exception as e:
+            self.is_loading = False
+            logger.error(f"Error during background initialization: {e}")
+            self._send_event("ERROR", f"Initialization failed: {e}")
+
+    def _reload_model(self, model_size):
+        """Reloads the Whisper model with a new size in the background."""
+        if self.is_loading:
+            return
+        
+        logger.info(f"Reloading Whisper model to '{model_size}'...")
+        self.is_loading = True
+        self._send_event("STATUS", "INITIALIZING")
+        
+        try:
+            from transcriber import Transcriber
+            self.transcriber = Transcriber(model_size=model_size)
+            self.current_loaded_model = model_size
+            self.is_loading = False
+            logger.info(f"Model reloaded successfully to '{model_size}'. Ready.")
+            self._send_event("STATUS", "READY")
+        except Exception as e:
+            self.is_loading = False
+            logger.error(f"Failed to reload model: {e}")
+            self._send_event("ERROR", f"Model reload failed: {e}")
+
     def _partial_transcription_worker(self):
         """Worker thread to transcribe partial data while recording."""
         logger.info("Starting partial transcription worker...")
@@ -111,7 +173,7 @@ class MikeWhisperSidecar:
                 break
             
             # Auto-stop from silence timeout
-            if getattr(self.recorder, 'timeout_triggered', False):
+            if self.recorder and getattr(self.recorder, 'timeout_triggered', False):
                 logger.info("Silence timeout hit, stopping recording automatically.")
                 self.recorder.timeout_triggered = False
                 self.is_live = False
@@ -119,11 +181,11 @@ class MikeWhisperSidecar:
                 if audio_data.size > 0:
                     self.processing_queue.put(audio_data)
                 else:
-                    self._send_event("STATUS", "READY")
+                    self._send_event("STATUS", "READY" if self.models_loaded else "INITIALIZING")
                 break
 
             # Only transcribe partial if user actually spoke since last tick
-            if getattr(self.recorder, 'speech_detected_since_last_poll', False):
+            if self.recorder and getattr(self.recorder, 'speech_detected_since_last_poll', False):
                 self.recorder.speech_detected_since_last_poll = False
                 audio_data = self.recorder.get_current_buffer()
                 if audio_data.size > 16000: # At least 1 second
@@ -140,10 +202,13 @@ class MikeWhisperSidecar:
                 audio_data = self.processing_queue.get(timeout=0.5)
                 self._send_event("STATUS", "PROCESSING")
                 
-                text = self.transcriber.transcribe(
-                    audio_data, 
-                    initial_prompt=self.config.get("vocabulary")
-                )
+                if self.transcriber:
+                    text = self.transcriber.transcribe(
+                        audio_data, 
+                        initial_prompt=self.config.get("vocabulary")
+                    )
+                else:
+                    text = ""
                 
                 if text:
                     # Apply AI formatting if enabled
@@ -155,7 +220,7 @@ class MikeWhisperSidecar:
                 else:
                     self._send_event("STATUS", "NO_SPEECH")
                 
-                self._send_event("STATUS", "READY")
+                self._send_event("STATUS", "READY" if self.models_loaded else "INITIALIZING")
                 self.processing_queue.task_done()
             except queue.Empty:
                 continue
@@ -178,9 +243,16 @@ class MikeWhisperSidecar:
                 try:
                     cmd_data = json.loads(line)
                     if cmd_data.get("type") == "SET_CONFIG":
-                        self.config.update(cmd_data.get("data", {}))
-                        logger.info(f"Updated config: {self.config.get('mode')}")
-                        continue # Processed config, move to next line
+                        new_config = cmd_data.get("data", {})
+                        self.config.update(new_config)
+                        new_model = self.config.get("model_size", "base.en")
+                        
+                        logger.info(f"Updated config: mode={self.config.get('mode')}, model={new_model}")
+                        
+                        # If models are loaded and model_size changed, trigger reload in background
+                        if self.models_loaded and new_model != self.current_loaded_model:
+                            threading.Thread(target=self._reload_model, args=(new_model,), daemon=True).start()
+                        continue
                     # If it's a JSON command but not SET_CONFIG, treat it as an unknown JSON command
                     logger.warning(f"Received unknown JSON command: {cmd_data}")
                     continue
@@ -194,8 +266,12 @@ class MikeWhisperSidecar:
                 logger.info(f"Received command: {command}")
                 
                 if command == "PING":
-                    self._send_event("STATUS", "READY")
+                    self._send_event("STATUS", "READY" if self.models_loaded else "INITIALIZING")
                 elif command == "START_RECORDING":
+                    if not self.models_loaded or self.is_loading:
+                        logger.warning("Recording requested but models are not loaded yet.")
+                        self._send_event("STATUS", "INITIALIZING")
+                        continue
                     self.recorder.start_recording()
                     self.is_live = True
                     self.partial_thread = threading.Thread(target=self._partial_transcription_worker, daemon=True)
@@ -204,6 +280,9 @@ class MikeWhisperSidecar:
                 
                 elif command == "STOP_RECORDING":
                     self.is_live = False
+                    if not self.models_loaded or self.is_loading:
+                        self._send_event("STATUS", "INITIALIZING")
+                        continue
                     audio_data = self.recorder.stop_recording()
                     if audio_data.size > 0:
                         self.processing_queue.put(audio_data)
