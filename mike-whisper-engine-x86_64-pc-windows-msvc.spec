@@ -6,11 +6,11 @@ a = Analysis(
     pathex=['src', '.\\venv\\Lib\\site-packages'],
     binaries=[],
     datas=collect_data_files('faster_whisper'),
-    hiddenimports=['audio_recorder', 'transcriber', 'injector', 'faster_whisper', 'torch', 'sounddevice', 'keyboard', 'numpy', 'requests', 'pyperclip', 'onnxruntime'],
+    hiddenimports=['audio_recorder', 'transcriber', 'injector', 'faster_whisper', 'sounddevice', 'keyboard', 'numpy', 'requests', 'pyperclip', 'onnxruntime'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['torch'],
     noarchive=False,
     optimize=0,
 )

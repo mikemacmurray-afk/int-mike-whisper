@@ -8,29 +8,51 @@ logger = logging.getLogger(__name__)
 
 class StreamingSileroVAD:
     def __init__(self, threshold=0.5):
-        from faster_whisper.vad import get_vad_model
-        # get_vad_model caching protects from reloading
-        self.model = get_vad_model()
-        self.threshold = threshold
-        self.reset_states()
+        self.use_energy_vad = False
+        try:
+            from faster_whisper.vad import get_vad_model
+            # get_vad_model caching protects from reloading
+            self.model = get_vad_model()
+            self.threshold = threshold
+            self.reset_states()
+        except Exception as e:
+            logger.warning(f"Failed to load Silero VAD (ONNX Runtime): {e}. Falling back to simple energy-based VAD.")
+            self.use_energy_vad = True
+            # Simple threshold for audio signal energy
+            self.threshold = 0.005 
 
     def reset_states(self):
+        if self.use_energy_vad:
+            return
         self.h = np.zeros((1, 1, 128), dtype="float32")
         self.c = np.zeros((1, 1, 128), dtype="float32")
         self.context = np.zeros((1, 64), dtype="float32")
 
     def process_chunk(self, audio_chunk: np.ndarray) -> float:
-        """Processes exactly 512 samples and returns speech probability."""
+        """Processes exactly 512 samples and returns speech probability or energy level."""
         if len(audio_chunk) < 512:
             return 0.0
+            
+        if self.use_energy_vad:
+            # Calculate RMS energy of the chunk
+            rms = np.sqrt(np.mean(audio_chunk**2))
+            return float(rms)
+            
         batched_audio = np.concatenate([self.context[0], audio_chunk]).reshape(1, 576).astype(np.float32)
         self.context[0] = audio_chunk[-64:]
         
-        output, self.h, self.c = self.model.session.run(
-            None,
-            {"input": batched_audio, "h": self.h, "c": self.c},
-        )
-        return float(output[0])
+        try:
+            output, self.h, self.c = self.model.session.run(
+                None,
+                {"input": batched_audio, "h": self.h, "c": self.c},
+            )
+            return float(output[0])
+        except Exception as e:
+            logger.warning(f"ONNX session run failed: {e}. Switching to energy-based VAD.")
+            self.use_energy_vad = True
+            self.threshold = 0.005
+            rms = np.sqrt(np.mean(audio_chunk**2))
+            return float(rms)
 
 class AudioRecorder:
     def __init__(self, sample_rate=16000, channels=1):
