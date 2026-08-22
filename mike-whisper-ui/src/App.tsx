@@ -33,6 +33,17 @@ function App() {
     }
   };
 
+  const handleRestart = async () => {
+    setStatus("INITIALIZING");
+    setError("");
+    try {
+      await invoke("restart_engine");
+    } catch (e: any) {
+      setError("Failed to restart engine: " + e.toString());
+      setStatus("ERROR");
+    }
+  };
+
   useEffect(() => {
     // Load history from localStorage
     const savedHistory = localStorage.getItem("mike-whisper-history");
@@ -130,7 +141,7 @@ function App() {
           <div className={`status-badge ${status.toLowerCase()}`}>
             {status}
           </div>
-          <button className="btn-icon" onClick={() => invoke("ping_sidecar")} title="Refresh Engine">
+          <button className="btn-icon" onClick={handleRestart} title="Restart Engine">
             🔄
           </button>
           <button
@@ -192,7 +203,12 @@ function App() {
         </section>
       </div>
 
-      {error && <div className="error-footer">{error}</div>}
+      {error && (
+        <div className="error-footer">
+          <span>{error}</span>
+          <button className="btn-restart-inline" onClick={handleRestart}>Restart</button>
+        </div>
+      )}
 
       <footer className="footer-info">
         <p>Press and hold hotkey to record. Release to transcribe & inject.</p>

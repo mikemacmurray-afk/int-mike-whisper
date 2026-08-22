@@ -14,13 +14,203 @@ enum EngineChild {
 struct EngineState {
     child: Arc<Mutex<Option<EngineChild>>>,
     current_shortcut: Mutex<Option<Shortcut>>,
+    stderr_lines: Arc<Mutex<Vec<String>>>,
+}
+
+fn write_log_file(app: &tauri::AppHandle, message: &str) {
+    if let Ok(log_dir) = app.path().app_log_dir() {
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_file = log_dir.join("mike-whisper-engine.log");
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file)
+        {
+            let timestamp = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                Ok(n) => n.as_secs().to_string(),
+                Err(_) => "0".to_string(),
+            };
+            let _ = writeln!(file, "[{}] {}", timestamp, message);
+        }
+    }
+}
+
+fn spawn_engine(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<EngineState>();
+    let stderr_lines = state.stderr_lines.clone();
+    
+    write_log_file(app, "Attempting to spawn engine...");
+    
+    #[cfg(debug_assertions)]
+    let mut child = {
+        let cwd = std::env::current_dir().unwrap();
+        let project_root = cwd.parent().unwrap().parent().unwrap();
+        let python_path = project_root.join("venv").join("Scripts").join("python.exe");
+        let script_path = project_root.join("src").join("sidecar_main.py");
+        
+        println!("Starting Python Engine via std::process (DEV): {:?}", script_path);
+        write_log_file(app, &format!("DEV Python path: {:?}", python_path));
+        write_log_file(app, &format!("DEV Script path: {:?}", script_path));
+        
+        std::process::Command::new(python_path)
+            .arg(script_path)
+            .current_dir(project_root)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn DEV process: {}", e))?
+    };
+
+    #[cfg(not(debug_assertions))]
+    use tauri_plugin_shell::ShellExt;
+    #[cfg(not(debug_assertions))]
+    let sidecar_command = app.shell().sidecar("mike-whisper-engine")
+        .map_err(|e| format!("Failed to resolve sidecar command: {}", e))?;
+    
+    #[cfg(not(debug_assertions))]
+    let (mut rx, mut child) = sidecar_command
+        .spawn()
+        .map_err(|e| {
+            let err = format!("Failed to spawn release sidecar: {}", e);
+            write_log_file(app, &err);
+            err
+        })?;
+
+    // Set up stdout/stderr reading
+    #[cfg(debug_assertions)]
+    let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    
+    #[cfg(debug_assertions)]
+    let stdout_reader = std::io::BufReader::new(stdout);
+    #[cfg(debug_assertions)]
+    let stderr_reader = std::io::BufReader::new(stderr);
+    
+    #[cfg(debug_assertions)]
+    {
+        let app_clone = app.clone();
+        tauri::async_runtime::spawn(async move {
+            use std::io::BufRead;
+            let mut lines = stdout_reader.lines();
+            while let Some(line) = lines.next() {
+                if let Ok(l) = line {
+                    write_log_file(&app_clone, &format!("Stdout: {}", l));
+                    let _ = app_clone.emit("sidecar-event", &l);
+                    if l.contains("PARTIAL_RESULT") || l.contains("RESULT") || l.contains("STATUS") {
+                        let _ = app_clone.emit_to("overlay", "overlay-event", &l);
+                    }
+                }
+            }
+        });
+
+        let app_clone_err = app.clone();
+        let stderr_lines_clone = stderr_lines.clone();
+        tauri::async_runtime::spawn(async move {
+            use std::io::BufRead;
+            let mut lines = stderr_reader.lines();
+            while let Some(line) = lines.next() {
+                if let Ok(l) = line {
+                    write_log_file(&app_clone_err, &format!("Stderr: {}", l));
+                    let mut err_lock = stderr_lines_clone.lock().unwrap();
+                    err_lock.push(l.clone());
+                    if err_lock.len() > 20 { err_lock.remove(0); }
+                    let _ = app_clone_err.emit("sidecar-event", format!("{{\"type\": \"LOG\", \"data\": \"{}\"}}", l));
+                }
+            }
+        });
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        let app_clone = app.clone();
+        let stderr_lines_clone = stderr_lines.clone();
+        tauri::async_runtime::spawn(async move {
+            use tauri_plugin_shell::process::CommandEvent;
+            while let Some(event) = rx.recv().await {
+                match event {
+                    CommandEvent::Stdout(line) => {
+                        if let Ok(l) = String::from_utf8(line) {
+                            write_log_file(&app_clone, &format!("Stdout: {}", l));
+                            let _ = app_clone.emit("sidecar-event", &l);
+                            if l.contains("PARTIAL_RESULT") || l.contains("RESULT") || l.contains("STATUS") {
+                                    let _ = app_clone.emit_to("overlay", "overlay-event", &l);
+                            }
+                        }
+                    }
+                    CommandEvent::Stderr(line) => {
+                        if let Ok(l) = String::from_utf8(line) {
+                            write_log_file(&app_clone, &format!("Stderr: {}", l));
+                            let mut err_lock = stderr_lines_clone.lock().unwrap();
+                            err_lock.push(l.clone());
+                            if err_lock.len() > 20 { err_lock.remove(0); }
+                            let _ = app_clone.emit("sidecar-event", format!("{{\"type\": \"LOG\", \"data\": \"{}\"}}", l));
+                        }
+                    }
+                    CommandEvent::Terminated(payload) => {
+                        let last_errors = {
+                            let lines = stderr_lines_clone.lock().unwrap();
+                            lines.join("\n")
+                        };
+                        let err_msg = format!(
+                            "Engine exited unexpectedly (code: {:?}).\n{}",
+                            payload.code, last_errors
+                        );
+                        write_log_file(&app_clone, &err_msg);
+                        let _ = app_clone.emit("sidecar-event", format!(
+                            "{{\"type\": \"ERROR\", \"data\": {}}}",
+                            serde_json::to_string(&err_msg).unwrap()
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+
+    // Store child handle
+    #[cfg(debug_assertions)]
+    { *state.child.lock().unwrap() = Some(EngineChild::Std(child)); }
+    #[cfg(not(debug_assertions))]
+    { *state.child.lock().unwrap() = Some(EngineChild::Sidecar(child)); }
+    
+    // Sync initial config
+    sync_sidecar_config(app);
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn restart_engine(app: AppHandle) -> Result<(), String> {
+    write_log_file(&app, "Restart engine command invoked.");
+    // 1. Kill old engine if any is stored
+    {
+        let state = app.state::<EngineState>();
+        let mut child_lock = state.child.lock().unwrap();
+        if let Some(child) = child_lock.take() {
+            match child {
+                EngineChild::Std(mut c) => { let _ = c.kill(); }
+                EngineChild::Sidecar(c) => { let _ = c.kill(); }
+            }
+        }
+    }
+    
+    // Clear stderr lines
+    {
+        let state = app.state::<EngineState>();
+        state.stderr_lines.lock().unwrap().clear();
+    }
+    
+    // 2. Spawn new engine
+    spawn_engine(&app)?;
+    
+    Ok(())
 }
 
 impl EngineChild {
     fn stdin_write(&mut self, data: &[u8]) -> std::io::Result<()> {
         match self {
             EngineChild::Std(child) => {
-                if let Some(mut stdin) = child.stdin.as_mut() {
+                if let Some(stdin) = child.stdin.as_mut() {
                     stdin.write_all(data)?;
                     stdin.flush()?;
                 }
@@ -188,6 +378,7 @@ pub fn run() {
     let engine_state = EngineState {
         child: Arc::new(Mutex::new(None)),
         current_shortcut: Mutex::new(None),
+        stderr_lines: Arc::new(Mutex::new(Vec::new())),
     };
 
     tauri::Builder::default()
@@ -261,112 +452,7 @@ pub fn run() {
             *app.state::<EngineState>().current_shortcut.lock().unwrap() = Some(shortcut);
 
             // Spawn AI Engine
-            #[cfg(debug_assertions)]
-            let (python_path, script_path, project_root) = {
-                let cwd = std::env::current_dir().unwrap();
-                let project_root = cwd.parent().unwrap().parent().unwrap();
-                let python_path = project_root.join("venv").join("Scripts").join("python.exe");
-                let script_path = project_root.join("src").join("sidecar_main.py");
-                (python_path, script_path, project_root.to_path_buf())
-            };
-
-            #[cfg(debug_assertions)]
-            println!("Starting Python Engine via std::process (DEV): {:?}", script_path);
-            
-            #[cfg(debug_assertions)]
-            let mut child = std::process::Command::new(python_path)
-                .arg(script_path)
-                .current_dir(project_root)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .map_err(|e| Box::new(e))?;
-
-            #[cfg(not(debug_assertions))]
-            use tauri_plugin_shell::ShellExt;
-            #[cfg(not(debug_assertions))]
-            let sidecar_command = app.shell().sidecar("mike-whisper-engine")
-                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-            
-            #[cfg(not(debug_assertions))]
-            let (mut rx, mut child) = sidecar_command
-                .spawn()
-                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-
-            #[cfg(debug_assertions)]
-            let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
-            
-            #[cfg(debug_assertions)]
-            let stdout_reader = std::io::BufReader::new(stdout);
-            #[cfg(debug_assertions)]
-            let stderr_reader = std::io::BufReader::new(stderr);
-            
-            #[cfg(debug_assertions)]
-            {
-                let app_clone = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    use std::io::BufRead;
-                    let mut lines = stdout_reader.lines();
-                    while let Some(line) = lines.next() {
-                        if let Ok(l) = line {
-                            let _ = app_clone.emit("sidecar-event", &l);
-                            if l.contains("PARTIAL_RESULT") || l.contains("RESULT") || l.contains("STATUS") {
-                                let _ = app_clone.emit_to("overlay", "overlay-event", &l);
-                            }
-                        }
-                    }
-                });
-
-                let app_clone_err = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    use std::io::BufRead;
-                    let mut lines = stderr_reader.lines();
-                    while let Some(line) = lines.next() {
-                        if let Ok(l) = line {
-                            eprintln!("Sidecar Stderr: {}", l);
-                            let _ = app_clone_err.emit("sidecar-event", format!("{{\"type\": \"LOG\", \"data\": \"{}\"}}", l));
-                        }
-                    }
-                });
-            }
-
-            #[cfg(not(debug_assertions))]
-            {
-                let app_clone = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    use tauri_plugin_shell::process::CommandEvent;
-                    while let Some(event) = rx.recv().await {
-                        match event {
-                            CommandEvent::Stdout(line) => {
-                                if let Ok(l) = String::from_utf8(line) {
-                                    let _ = app_clone.emit("sidecar-event", &l);
-                                    if l.contains("PARTIAL_RESULT") || l.contains("RESULT") || l.contains("STATUS") {
-                                        let _ = app_clone.emit_to("overlay", "overlay-event", &l);
-                                    }
-                                }
-                            }
-                            CommandEvent::Stderr(line) => {
-                                if let Ok(l) = String::from_utf8(line) {
-                                    eprintln!("Sidecar Stderr: {}", l);
-                                    let _ = app_clone.emit("sidecar-event", format!("{{\"type\": \"LOG\", \"data\": \"{}\"}}", l));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                });
-            }
-
-            // Store child handle
-            let state = app.state::<EngineState>();
-            #[cfg(debug_assertions)]
-            { *state.child.lock().unwrap() = Some(EngineChild::Std(child)); }
-            #[cfg(not(debug_assertions))]
-            { *state.child.lock().unwrap() = Some(EngineChild::Sidecar(child)); }
-            
-            // Sync initial config
-            sync_sidecar_config(app.handle());
+            spawn_engine(app.handle()).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
 
             // Create Overlay Window
             let _overlay_window = tauri::WebviewWindowBuilder::new(
@@ -422,7 +508,8 @@ pub fn run() {
             ping_sidecar, 
             force_record_start, 
             force_record_stop,
-            open_settings_window
+            open_settings_window,
+            restart_engine
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

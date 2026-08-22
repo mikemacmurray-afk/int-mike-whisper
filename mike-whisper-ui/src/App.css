@@ -381,12 +381,35 @@ select {
   max-width: 520px;
   background: #fee2e2;
   color: #991b1b;
-  padding: 0.75rem;
+  padding: 0.75rem 1rem;
   border-radius: 0.5rem;
   font-size: 0.85rem;
   border: 1px solid #fca5a5;
   box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
   z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  white-space: pre-wrap;
+}
+
+.btn-restart-inline {
+  background: #991b1b;
+  border: 1px solid #b91c1c;
+  color: white;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.btn-restart-inline:hover {
+  background: #b91c1c;
+  transform: translateY(-1px);
 }
 .setting-item-block {
   display: flex;
