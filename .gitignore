@@ -10,3 +10,5 @@ dist/
 mike-whisper-ui/src-tauri/target/
 mike-whisper-ui/src-tauri/bin/*.exe
 mike-whisper-ui/src-tauri/cargo_error.txt
+# Bundled local model weights
+models/

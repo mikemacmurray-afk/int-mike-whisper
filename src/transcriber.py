@@ -22,13 +22,31 @@ class Transcriber:
                 logger.warning(f"Error checking CUDA devices via ctranslate2: {e}. Defaulting to cpu.")
                 device = "cpu"
         
+        # Resolve model path
+        import sys
+        import os
+        
+        if getattr(sys, 'frozen', False):
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            
+        local_model_path = os.path.join(base_path, "models", model_size)
+        
+        if os.path.exists(local_model_path) and os.path.isdir(local_model_path):
+            logger.info(f"Loading Whisper model from bundled local path: {local_model_path}")
+            model_to_load = local_model_path
+        else:
+            logger.info(f"Local model path not found at {local_model_path}. Fetching '{model_size}' from Hugging Face...")
+            model_to_load = model_size
+
         if compute_type is None:
             compute_type = "float16" if device == "cuda" else "int8"
             
         logger.info(f"Initializing Whisper model '{model_size}' on '{device}' ({compute_type})...")
         try:
             self.model = WhisperModel(
-                model_size, 
+                model_to_load, 
                 device=device, 
                 compute_type=compute_type,
                 cpu_threads=4 # Limit CPU threads to reduce system load during transcription
@@ -40,7 +58,7 @@ class Transcriber:
                 compute_type = "int8"
                 logger.info(f"Re-initializing Whisper model '{model_size}' on '{device}' ({compute_type})...")
                 self.model = WhisperModel(
-                    model_size,
+                    model_to_load,
                     device=device,
                     compute_type=compute_type,
                     cpu_threads=4

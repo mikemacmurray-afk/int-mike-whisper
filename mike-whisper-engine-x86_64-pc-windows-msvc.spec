@@ -5,7 +5,7 @@ a = Analysis(
     ['src\\sidecar_main.py'],
     pathex=['src', '.\\venv\\Lib\\site-packages'],
     binaries=[],
-    datas=collect_data_files('faster_whisper'),
+    datas=collect_data_files('faster_whisper') + [('models', 'models')],
     hiddenimports=['audio_recorder', 'transcriber', 'injector', 'faster_whisper', 'sounddevice', 'keyboard', 'numpy', 'requests', 'pyperclip', 'onnxruntime'],
     hookspath=[],
     hooksconfig={},
