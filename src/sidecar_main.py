@@ -18,6 +18,9 @@ else:
 sys.path.append(bundle_dir)
 
 from injector import TextInjector
+# Import heavy dependencies in the main thread to prevent Windows DLL loader lock deadlocks with blocking stdin reads.
+from audio_recorder import AudioRecorder
+from transcriber import Transcriber
 
 # Configure logging to stderr so it doesn't mess with stdout IPC
 logging.basicConfig(
@@ -112,18 +115,11 @@ class MikeWhisperSidecar:
             return text
 
     def _initialize_models(self):
-        """Background thread to import heavy libraries and load Whisper/VAD models."""
+        """Background thread to load Whisper/VAD models."""
         self.is_loading = True
         self._send_event("STATUS", "INITIALIZING")
         
         try:
-            logger.info("Background thread importing dependencies...")
-            global AudioRecorder, Transcriber
-            
-            # Defer heavy imports
-            from audio_recorder import AudioRecorder
-            from transcriber import Transcriber
-            
             # Wait briefly to let SET_CONFIG command arrive from Tauri (which has the configured model size)
             time.sleep(0.5)
             
