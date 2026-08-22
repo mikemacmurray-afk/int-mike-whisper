@@ -47,7 +47,7 @@ function App() {
     // Load Settings from Rust
     invoke<string>("get_setting", { key: "ai_mode" }).then((m) => setAiMode(m || "raw")).catch(console.error);
 
-    // Initial Engine Check - give it 60s for first-run model download
+    // Initial Engine Check - give it 5 minutes for first-run model download
     const timer = setTimeout(() => {
       setStatus(currentStatus => {
         if (currentStatus === "INITIALIZING" || currentStatus === "IDLE") {
@@ -56,7 +56,7 @@ function App() {
         }
         return currentStatus;
       });
-    }, 60000);
+    }, 300000);
 
     return () => clearTimeout(timer);
   }, []);

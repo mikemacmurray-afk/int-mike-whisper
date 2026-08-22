@@ -26,12 +26,27 @@ class Transcriber:
             compute_type = "float16" if device == "cuda" else "int8"
             
         logger.info(f"Initializing Whisper model '{model_size}' on '{device}' ({compute_type})...")
-        self.model = WhisperModel(
-            model_size, 
-            device=device, 
-            compute_type=compute_type,
-            cpu_threads=4 # Limit CPU threads to reduce system load during transcription
-        )
+        try:
+            self.model = WhisperModel(
+                model_size, 
+                device=device, 
+                compute_type=compute_type,
+                cpu_threads=4 # Limit CPU threads to reduce system load during transcription
+            )
+        except Exception as e:
+            if device == "cuda":
+                logger.warning(f"Failed to initialize Whisper on CUDA: {e}. Falling back to CPU.")
+                device = "cpu"
+                compute_type = "int8"
+                logger.info(f"Re-initializing Whisper model '{model_size}' on '{device}' ({compute_type})...")
+                self.model = WhisperModel(
+                    model_size,
+                    device=device,
+                    compute_type=compute_type,
+                    cpu_threads=4
+                )
+            else:
+                raise e
 
     def transcribe(self, audio_data, initial_prompt=None):
         """
