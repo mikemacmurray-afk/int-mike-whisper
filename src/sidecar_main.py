@@ -7,6 +7,11 @@ import queue
 import time
 import requests
 
+# Disable Intel MKL to prevent CTranslate2 0xC0000005 segmentation faults on virtualized CPUs
+os.environ["CT2_USE_MKL"] = "0"
+# Permit duplicate OpenMP library loading
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 # Handle PyInstaller paths
 if getattr(sys, 'frozen', False):
     # If running as a bundle, the modules are in the temp folder
