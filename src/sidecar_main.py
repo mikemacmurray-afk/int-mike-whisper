@@ -9,6 +9,8 @@ import requests
 
 # Disable Intel MKL to prevent CTranslate2 0xC0000005 segmentation faults on virtualized CPUs
 os.environ["CT2_USE_MKL"] = "0"
+# Force CTranslate2 to use generic CPU instruction set (no AVX/AVX2/AVX512) for maximum compatibility on VMs
+os.environ["CT2_FORCE_CPU_ISA"] = "GENERIC"
 # Permit duplicate OpenMP library loading
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 

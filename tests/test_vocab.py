@@ -8,30 +8,25 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.transcriber import Transcriber
 
 def test_transcriber_with_prompt():
-    # This is just a structural test to ensure arguments are accepted correctly
-    # We don't actually load a model here to save time/memory in this environment
-    # but we verify the method signature and call logic
+    # Verify that initial_prompt is correctly formatted and passed to whisper-cli subprocess
+    import unittest.mock as mock
     
     try:
-        # Mocking the model since we can't easily download it here
-        class MockModel:
-            def transcribe(self, audio, beam_size=1, initial_prompt=None):
-                print(f"Model received prompt: {initial_prompt}")
-                class Segment:
-                    def __init__(self): self.text = "test result"
-                class Info:
-                    def __init__(self): self.language = "en"
-                return [Segment()], Info()
-        
-        t = Transcriber(model_size="base.en")
-        t.model = MockModel() # Swap actual model for mock
-        
-        audio = np.zeros(16000, dtype=np.float32)
-        res = t.transcribe(audio, initial_prompt="CustomWord1, CustomWord2")
-        
-        assert res == "test result"
-        print("Test passed: initial_prompt accepted and passed to model.")
-        
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="test result", stderr="")
+            t = Transcriber(model_size="base.en")
+            
+            audio = np.zeros(16000, dtype=np.float32)
+            res = t.transcribe(audio, initial_prompt="CustomWord1, CustomWord2")
+            
+            assert res == "test result"
+            # Check that command arguments include --prompt
+            called_args = mock_run.call_args[0][0]
+            assert "--prompt" in called_args
+            assert "CustomWord1, CustomWord2" in called_args
+            
+            print("Test passed: initial_prompt accepted and passed to whisper-cli.")
+            
     except Exception as e:
         print(f"Test failed: {e}")
 
