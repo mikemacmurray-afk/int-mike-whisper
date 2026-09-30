@@ -1,0 +1,6 @@
+{
+  "hotkey_cursor": "Ctrl+Space",
+  "hotkey_brain": "Fn+Space",
+  "daily_brain_url": "http://localhost:4321/api/inbox",
+  "offline_queue_path": "~/.mikewhisper_brain_queue.jsonl"
+}

@@ -28,6 +28,7 @@ from injector import TextInjector
 # Import heavy dependencies in the main thread to prevent Windows DLL loader lock deadlocks with blocking stdin reads.
 from audio_recorder import AudioRecorder
 from transcriber import Transcriber
+from brain_dispatcher import dispatch_to_daily_brain
 
 # Configure logging to stderr so it doesn't mess with stdout IPC
 logging.basicConfig(
@@ -202,7 +203,12 @@ class MikeWhisperSidecar:
     def _process_worker(self):
         while self.is_running:
             try:
-                audio_data = self.processing_queue.get(timeout=0.5)
+                item = self.processing_queue.get(timeout=0.5)
+                if isinstance(item, tuple):
+                    audio_data, mode = item
+                else:
+                    audio_data, mode = item, "cursor"
+
                 self._send_event("STATUS", "PROCESSING")
                 
                 if self.transcriber:
@@ -217,8 +223,13 @@ class MikeWhisperSidecar:
                     # Apply AI formatting if enabled
                     final_text = self._format_text_ai(text)
                     
-                    # Inject text directly
-                    self.injector.inject(final_text)
+                    if mode == "brain":
+                        logger.info("Dispatching transcribed text to Daily Brain...")
+                        dispatch_to_daily_brain(final_text)
+                        self._send_event("BRAIN_DISPATCHED", final_text)
+                    else:
+                        # Inject text directly
+                        self.injector.inject(final_text)
                     self._send_event("RESULT", final_text)
                 else:
                     self._send_event("STATUS", "NO_SPEECH")
@@ -235,6 +246,7 @@ class MikeWhisperSidecar:
         """Listen for commands from stdin."""
         logger.info("Sidecar listening for commands...")
         self.is_live = False
+        self.current_recording_target = "cursor"
         try:
             for line in sys.stdin:
                 line = line.strip()
@@ -245,7 +257,8 @@ class MikeWhisperSidecar:
                 command = None
                 try:
                     cmd_data = json.loads(line)
-                    if cmd_data.get("type") == "SET_CONFIG":
+                    cmd_type = cmd_data.get("type")
+                    if cmd_type == "SET_CONFIG":
                         new_config = cmd_data.get("data", {})
                         self.config.update(new_config)
                         new_model = self.config.get("model_size", "base.en")
@@ -256,7 +269,32 @@ class MikeWhisperSidecar:
                         if self.models_loaded and new_model != self.current_loaded_model:
                             threading.Thread(target=self._reload_model, args=(new_model,), daemon=True).start()
                         continue
-                    # If it's a JSON command but not SET_CONFIG, treat it as an unknown JSON command
+                    elif cmd_type == "START_RECORDING":
+                        if not self.models_loaded or self.is_loading:
+                            logger.warning("Recording requested but models are not loaded yet.")
+                            self._send_event("STATUS", "INITIALIZING")
+                            continue
+                        target = cmd_data.get("target") or cmd_data.get("data", {}).get("target", "cursor") if isinstance(cmd_data.get("data"), dict) else "cursor"
+                        self.current_recording_target = target
+                        self.recorder.start_recording()
+                        self.is_live = True
+                        self.partial_thread = threading.Thread(target=self._partial_transcription_worker, daemon=True)
+                        self.partial_thread.start()
+                        self._send_event("STATUS", "RECORDING")
+                        continue
+                    elif cmd_type == "STOP_RECORDING":
+                        self.is_live = False
+                        if not self.models_loaded or self.is_loading:
+                            self._send_event("STATUS", "INITIALIZING")
+                            continue
+                        audio_data = self.recorder.stop_recording()
+                        target = cmd_data.get("target") or (cmd_data.get("data", {}).get("target") if isinstance(cmd_data.get("data"), dict) else None) or getattr(self, "current_recording_target", "cursor")
+                        if audio_data.size > 0:
+                            self.processing_queue.put((audio_data, target))
+                        else:
+                            self._send_event("STATUS", "READY" if self.models_loaded else "INITIALIZING")
+                        continue
+                    # If it's a JSON command but not recognized above, treat as unknown
                     logger.warning(f"Received unknown JSON command: {cmd_data}")
                     continue
                 except json.JSONDecodeError:
@@ -270,28 +308,39 @@ class MikeWhisperSidecar:
                 
                 if command == "PING":
                     self._send_event("STATUS", "READY" if self.models_loaded else "INITIALIZING")
-                elif command == "START_RECORDING":
+                elif command in ("START_RECORDING", "START_RECORDING_CURSOR"):
                     if not self.models_loaded or self.is_loading:
                         logger.warning("Recording requested but models are not loaded yet.")
                         self._send_event("STATUS", "INITIALIZING")
                         continue
+                    self.current_recording_target = "cursor"
                     self.recorder.start_recording()
                     self.is_live = True
                     self.partial_thread = threading.Thread(target=self._partial_transcription_worker, daemon=True)
                     self.partial_thread.start()
                     self._send_event("STATUS", "RECORDING")
-                
-                elif command == "STOP_RECORDING":
+                elif command in ("START_RECORDING_BRAIN", "START_RECORDING:brain"):
+                    if not self.models_loaded or self.is_loading:
+                        logger.warning("Recording requested but models are not loaded yet.")
+                        self._send_event("STATUS", "INITIALIZING")
+                        continue
+                    self.current_recording_target = "brain"
+                    self.recorder.start_recording()
+                    self.is_live = True
+                    self.partial_thread = threading.Thread(target=self._partial_transcription_worker, daemon=True)
+                    self.partial_thread.start()
+                    self._send_event("STATUS", "RECORDING")
+                elif command in ("STOP_RECORDING", "STOP_RECORDING_CURSOR", "STOP_RECORDING_BRAIN", "STOP_RECORDING:brain"):
                     self.is_live = False
                     if not self.models_loaded or self.is_loading:
                         self._send_event("STATUS", "INITIALIZING")
                         continue
                     audio_data = self.recorder.stop_recording()
+                    target = "brain" if "brain" in command.lower() else getattr(self, "current_recording_target", "cursor")
                     if audio_data.size > 0:
-                        self.processing_queue.put(audio_data)
+                        self.processing_queue.put((audio_data, target))
                     else:
-                        self._send_event("STATUS", "READY")
-                
+                        self._send_event("STATUS", "READY" if self.models_loaded else "INITIALIZING")
                 elif command == "EXIT":
                     self.is_running = False
                     break

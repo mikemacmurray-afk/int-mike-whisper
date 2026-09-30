@@ -4,7 +4,12 @@ import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import "./App.css";
 
 function SettingsApp() {
-    const [hotkey, setHotkey] = useState("Ctrl+Shift+Space");
+    const [hotkeyCursor, setHotkeyCursor] = useState("control+Space");
+    const [hotkeyBrain, setHotkeyBrain] = useState("Fn+Space");
+    const [editingA, setEditingA] = useState(false);
+    const [editingB, setEditingB] = useState(false);
+    const [tempA, setTempA] = useState("");
+    const [tempB, setTempB] = useState("");
     const [autostart, setAutostart] = useState(false);
     const [openRouterKey, setOpenRouterKey] = useState("");
     const [vocabulary, setVocabulary] = useState("");
@@ -12,7 +17,12 @@ function SettingsApp() {
 
     useEffect(() => {
         // Load Settings from Rust
-        invoke<string>("get_hotkey").then(setHotkey).catch(console.error);
+        invoke<string>("get_hotkey_cursor")
+            .then(setHotkeyCursor)
+            .catch(() => {
+                invoke<string>("get_hotkey").then(setHotkeyCursor).catch(console.error);
+            });
+        invoke<string>("get_hotkey_brain").then(setHotkeyBrain).catch(console.error);
         invoke<string>("get_setting", { key: "openrouter_key" }).then(setOpenRouterKey).catch(console.error);
         invoke<string>("get_setting", { key: "custom_vocabulary" }).then(setVocabulary).catch(console.error);
         invoke<string>("get_setting", { key: "model_size" }).then((m) => setModelSize(m || "base.en")).catch(console.error);
@@ -28,15 +38,33 @@ function SettingsApp() {
         }
     };
 
-    const updateHotkey = async () => {
-        const newHotkey = prompt("Enter new hotkey (e.g. F1, Ctrl+S):", hotkey);
-        if (newHotkey && newHotkey !== hotkey) {
-            try {
-                await invoke("update_hotkey", { hotkeyStr: newHotkey });
-                setHotkey(newHotkey);
-            } catch (e) {
-                alert(e);
-            }
+    const saveCursorHotkey = async () => {
+        const trimmed = tempA.trim();
+        if (!trimmed) {
+            setEditingA(false);
+            return;
+        }
+        try {
+            await invoke("update_hotkey_cursor", { hotkeyStr: trimmed });
+            setHotkeyCursor(trimmed);
+            setEditingA(false);
+        } catch (e) {
+            alert(e);
+        }
+    };
+
+    const saveBrainHotkey = async () => {
+        const trimmed = tempB.trim();
+        if (!trimmed) {
+            setEditingB(false);
+            return;
+        }
+        try {
+            await invoke("update_hotkey_brain", { hotkeyStr: trimmed });
+            setHotkeyBrain(trimmed);
+            setEditingB(false);
+        } catch (e) {
+            alert(e);
         }
     };
 
@@ -97,10 +125,59 @@ function SettingsApp() {
                         </button>
                     </div>
                     <div className="setting-item">
-                        <label>Hotkey</label>
+                        <label>Hotkey A</label>
                         <div className="hotkey-recorder">
-                            <code className="hotkey">{hotkey}</code>
-                            <button className="btn-small" onClick={updateHotkey}>Change</button>
+                            {editingA ? (
+                                <>
+                                    <input
+                                        type="text"
+                                        className="hotkey-input"
+                                        value={tempA}
+                                        onChange={(e) => setTempA(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter") saveCursorHotkey();
+                                            if (e.key === "Escape") setEditingA(false);
+                                        }}
+                                        placeholder="e.g. control+Space"
+                                        autoFocus
+                                    />
+                                    <button className="btn-small btn-save" onClick={saveCursorHotkey}>Save</button>
+                                    <button className="btn-small" onClick={() => setEditingA(false)}>Cancel</button>
+                                </>
+                            ) : (
+                                <>
+                                    <code className="hotkey">{hotkeyCursor}</code>
+                                    <button className="btn-small" onClick={() => { setTempA(hotkeyCursor); setEditingA(true); }}>Change</button>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                    <div className="setting-item">
+                        <label>Hotkey B</label>
+                        <div className="hotkey-recorder">
+                            {editingB ? (
+                                <>
+                                    <input
+                                        type="text"
+                                        className="hotkey-input"
+                                        value={tempB}
+                                        onChange={(e) => setTempB(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter") saveBrainHotkey();
+                                            if (e.key === "Escape") setEditingB(false);
+                                        }}
+                                        placeholder="e.g. Fn+Space"
+                                        autoFocus
+                                    />
+                                    <button className="btn-small btn-save" onClick={saveBrainHotkey}>Save</button>
+                                    <button className="btn-small" onClick={() => setEditingB(false)}>Cancel</button>
+                                </>
+                            ) : (
+                                <>
+                                    <code className="hotkey">{hotkeyBrain}</code>
+                                    <button className="btn-small" onClick={() => { setTempB(hotkeyBrain); setEditingB(true); }}>Change</button>
+                                </>
+                            )}
                         </div>
                     </div>
                     <div className="setting-item">

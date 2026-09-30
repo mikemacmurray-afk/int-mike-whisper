@@ -247,6 +247,35 @@ h2 {
   color: white;
 }
 
+.btn-save {
+  background: #2563eb;
+  border-color: #3b82f6;
+  color: white;
+}
+
+.btn-save:hover {
+  background: #1d4ed8;
+  color: white;
+}
+
+.hotkey-input {
+  background: #0f172a;
+  border: 1px solid #3b82f6;
+  color: #f1f5f9;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.5rem;
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 0.85rem;
+  width: 130px;
+  outline: none;
+}
+
+.hotkey-input:focus {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2);
+}
+
 .history-section {
   border-top: 1px solid #334155;
   padding-top: 1.5rem;

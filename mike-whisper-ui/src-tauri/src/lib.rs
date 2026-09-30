@@ -13,7 +13,8 @@ enum EngineChild {
 
 struct EngineState {
     child: Arc<Mutex<Option<EngineChild>>>,
-    current_shortcut: Mutex<Option<Shortcut>>,
+    current_shortcut_cursor: Mutex<Option<Shortcut>>,
+    current_shortcut_brain: Mutex<Option<Shortcut>>,
     stderr_lines: Arc<Mutex<Vec<String>>>,
 }
 
@@ -252,11 +253,25 @@ fn force_record_stop(app: AppHandle) {
 
 #[tauri::command]
 fn get_hotkey(app: AppHandle) -> String {
+    get_hotkey_cursor(app)
+}
+
+#[tauri::command]
+fn get_hotkey_cursor(app: AppHandle) -> String {
     let state = app.state::<EngineState>();
-    let lock = state.current_shortcut.lock().unwrap();
+    let lock = state.current_shortcut_cursor.lock().unwrap();
     lock.as_ref()
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "Ctrl+Shift+Space".to_string())
+        .unwrap_or_else(|| "Ctrl+Space".to_string())
+}
+
+#[tauri::command]
+fn get_hotkey_brain(app: AppHandle) -> String {
+    let state = app.state::<EngineState>();
+    let lock = state.current_shortcut_brain.lock().unwrap();
+    lock.as_ref()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "Ctrl+Alt+Space".to_string())
 }
 
 #[tauri::command]
@@ -271,7 +286,7 @@ async fn open_settings_window(app: AppHandle) -> Result<(), String> {
             tauri::WebviewUrl::App("settings.html".into())
         )
         .title("MikeWhisper Settings")
-        .inner_size(400.0, 500.0)
+        .inner_size(440.0, 560.0)
         .resizable(false)
         .build()
         .map_err(|e| e.to_string())?;
@@ -342,32 +357,59 @@ fn sync_sidecar_config(app: &AppHandle) {
 
 #[tauri::command]
 async fn update_hotkey(app: AppHandle, hotkey_str: String) -> Result<(), String> {
+    update_hotkey_cursor(app, hotkey_str).await
+}
+
+#[tauri::command]
+async fn update_hotkey_cursor(app: AppHandle, hotkey_str: String) -> Result<(), String> {
     use tauri_plugin_store::StoreExt;
 
     let state = app.state::<EngineState>();
-    
-    // Parse shortcut
     let shortcut = Shortcut::from_str(&hotkey_str)
         .map_err(|e| format!("Invalid hotkey format: {}", e))?;
 
     let global_shortcut = app.global_shortcut();
-    
-    // Unregister old shortcut
-    let mut current_lock = state.current_shortcut.lock().unwrap();
+    let mut current_lock = state.current_shortcut_cursor.lock().unwrap();
     if let Some(old_shortcut) = current_lock.take() {
         let _ = global_shortcut.unregister(old_shortcut);
     }
 
-    // Register new shortcut
     global_shortcut.register(shortcut)
         .map_err(|e| format!("Failed to register hotkey: {}", e))?;
     
     *current_lock = Some(shortcut);
     
-    // Save to store
     let store = app.store("settings.json")
         .map_err(|e| e.to_string())?;
-    store.set("hotkey", serde_json::json!(hotkey_str));
+    store.set("hotkey", serde_json::json!(hotkey_str.clone()));
+    store.set("hotkey_cursor", serde_json::json!(hotkey_str));
+    store.save().map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn update_hotkey_brain(app: AppHandle, hotkey_str: String) -> Result<(), String> {
+    use tauri_plugin_store::StoreExt;
+
+    let state = app.state::<EngineState>();
+    let shortcut = Shortcut::from_str(&hotkey_str)
+        .map_err(|e| format!("Invalid brain hotkey format: {}", e))?;
+
+    let global_shortcut = app.global_shortcut();
+    let mut current_lock = state.current_shortcut_brain.lock().unwrap();
+    if let Some(old_shortcut) = current_lock.take() {
+        let _ = global_shortcut.unregister(old_shortcut);
+    }
+
+    global_shortcut.register(shortcut)
+        .map_err(|e| format!("Failed to register brain hotkey: {}", e))?;
+    
+    *current_lock = Some(shortcut);
+    
+    let store = app.store("settings.json")
+        .map_err(|e| e.to_string())?;
+    store.set("hotkey_brain", serde_json::json!(hotkey_str));
     store.save().map_err(|e| e.to_string())?;
     
     Ok(())
@@ -377,7 +419,8 @@ async fn update_hotkey(app: AppHandle, hotkey_str: String) -> Result<(), String>
 pub fn run() {
     let engine_state = EngineState {
         child: Arc::new(Mutex::new(None)),
-        current_shortcut: Mutex::new(None),
+        current_shortcut_cursor: Mutex::new(None),
+        current_shortcut_brain: Mutex::new(None),
         stderr_lines: Arc::new(Mutex::new(Vec::new())),
     };
 
@@ -393,22 +436,28 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
                     let engine_state = app.state::<EngineState>();
-                    let current_lock = engine_state.current_shortcut.lock().unwrap();
+                    let cursor_lock = engine_state.current_shortcut_cursor.lock().unwrap();
+                    let brain_lock = engine_state.current_shortcut_brain.lock().unwrap();
                     
-                    if Some(shortcut) == current_lock.as_ref() {
-                        println!("Hotkey triggered: {:?}", event.state());
+                    let is_cursor = Some(shortcut) == cursor_lock.as_ref();
+                    let is_brain = Some(shortcut) == brain_lock.as_ref();
+
+                    if is_cursor || is_brain {
+                        println!("Hotkey triggered (mode: {}): {:?}", if is_brain { "brain" } else { "cursor" }, event.state());
                         let mut child_lock = engine_state.child.lock().unwrap();
                         
                         if let Some(child) = child_lock.as_mut() {
                             match event.state() {
                                 ShortcutState::Pressed => {
-                                    println!("Sending command to sidecar: START_RECORDING");
-                                    let _ = child.stdin_write(b"START_RECORDING\n");
+                                    let cmd: &[u8] = if is_brain { b"START_RECORDING_BRAIN\n" } else { b"START_RECORDING\n" };
+                                    println!("Sending command to sidecar: {:?}", std::str::from_utf8(cmd).unwrap().trim());
+                                    let _ = child.stdin_write(cmd);
                                     let _ = app.emit("sidecar-event", "{\"type\": \"STATUS\", \"data\": \"RECORDING\"}");
                                 }
                                 ShortcutState::Released => {
-                                    println!("Sending command to sidecar: STOP_RECORDING");
-                                    let _ = child.stdin_write(b"STOP_RECORDING\n");
+                                    let cmd: &[u8] = if is_brain { b"STOP_RECORDING_BRAIN\n" } else { b"STOP_RECORDING\n" };
+                                    println!("Sending command to sidecar: {:?}", std::str::from_utf8(cmd).unwrap().trim());
+                                    let _ = child.stdin_write(cmd);
                                 }
                             }
                         } else {
@@ -431,25 +480,47 @@ pub fn run() {
                 }
             });
 
-            // Load shortcut from store
-            let hotkey_str = if let Ok(store) = app.store("settings.json") {
-                store.get("hotkey")
+            // Load shortcuts from store
+            let hotkey_cursor_str = if let Ok(store) = app.store("settings.json") {
+                store.get("hotkey_cursor")
+                    .or_else(|| store.get("hotkey"))
                     .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "Ctrl+Shift+Space".to_string())
+                    .unwrap_or_else(|| "Ctrl+Space".to_string())
             } else {
-                "Ctrl+Shift+Space".to_string()
+                "Ctrl+Space".to_string()
             };
 
-            println!("Registering hotkey: {}", hotkey_str);
-            let shortcut = match Shortcut::from_str(&hotkey_str) {
-                Ok(s) => s,
-                Err(_) => Shortcut::from_str("F2").unwrap_or_else(|_| Shortcut::from_str("Ctrl+Shift+Space").unwrap()),
+            let hotkey_brain_str = if let Ok(store) = app.store("settings.json") {
+                store.get("hotkey_brain")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "Ctrl+Alt+Space".to_string())
+            } else {
+                "Ctrl+Alt+Space".to_string()
             };
-            if let Err(e) = app.global_shortcut().register(shortcut) {
-                let _ = app.emit("sidecar-event", format!("{{\"type\": \"ERROR\", \"data\": \"Hotkey registration failed: {}\"}}", e));
-                eprintln!("Failed to register hotkey {}: {}", hotkey_str, e);
+
+            println!("Registering Cursor hotkey: {}", hotkey_cursor_str);
+            let shortcut_cursor = match Shortcut::from_str(&hotkey_cursor_str) {
+                Ok(s) => s,
+                Err(_) => Shortcut::from_str("Ctrl+Space").unwrap_or_else(|_| Shortcut::from_str("F2").unwrap()),
+            };
+            if let Err(e) = app.global_shortcut().register(shortcut_cursor) {
+                let _ = app.emit("sidecar-event", format!("{{\"type\": \"ERROR\", \"data\": \"Cursor hotkey registration failed: {}\"}}", e));
+                eprintln!("Failed to register cursor hotkey {}: {}", hotkey_cursor_str, e);
+            } else {
+                *app.state::<EngineState>().current_shortcut_cursor.lock().unwrap() = Some(shortcut_cursor);
             }
-            *app.state::<EngineState>().current_shortcut.lock().unwrap() = Some(shortcut);
+
+            println!("Registering Daily Brain hotkey: {}", hotkey_brain_str);
+            let shortcut_brain = match Shortcut::from_str(&hotkey_brain_str) {
+                Ok(s) => s,
+                Err(_) => Shortcut::from_str("Ctrl+Alt+Space").unwrap_or_else(|_| Shortcut::from_str("F3").unwrap()),
+            };
+            if let Err(e) = app.global_shortcut().register(shortcut_brain) {
+                let _ = app.emit("sidecar-event", format!("{{\"type\": \"ERROR\", \"data\": \"Brain hotkey registration failed: {}\"}}", e));
+                eprintln!("Failed to register brain hotkey {}: {}", hotkey_brain_str, e);
+            } else {
+                *app.state::<EngineState>().current_shortcut_brain.lock().unwrap() = Some(shortcut_brain);
+            }
 
             // Spawn AI Engine
             spawn_engine(app.handle()).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
@@ -502,7 +573,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_hotkey, 
+            get_hotkey_cursor,
+            get_hotkey_brain,
             update_hotkey, 
+            update_hotkey_cursor,
+            update_hotkey_brain,
             get_setting, 
             update_settings, 
             ping_sidecar, 
